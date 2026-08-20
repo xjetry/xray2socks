@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xray2Socks</title><link rel="stylesheet" href="/style.css"></head>
+<body><main><header><div><p class="eyebrow">LOCAL NETWORK TOOL</p><h1>Xray<span>2</span>Socks</h1><p class="sub">把远端代理接入本地 SOCKS5</p></div><div id="status" class="status"><i></i>检查中</div></header>
+<section class="panel"><div class="panel-title"><h2>粘贴代理 URI</h2><button id="test-uri" class="ghost">测试 generate204</button></div><div class="uri-row"><textarea id="uri" placeholder="ss://...  vless://...  trojan://..."></textarea><button id="parse" class="secondary">解析并添加</button></div><p id="test-message"></p></section>
+<section class="panel"><div class="panel-title"><h2>代理节点</h2><button id="add" class="ghost">＋ 添加节点</button></div><div id="proxies"></div></section>
+<footer><button id="save" class="secondary">保存配置</button><button id="toggle" class="primary">启动 Xray</button><p id="message"></p></footer></main><script src="/app.js"></script></body></html>

@@ -1,0 +1,10 @@
+/xray2socks
+/xray2socks-*
+/x2socks
+/x2socks-*
+/x2socks.pid
+/x2socks.log
+/config.json
+/xray-runtime.json
+/dist/
+/data/

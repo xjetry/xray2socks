@@ -1,0 +1,14 @@
+.git
+.gitignore
+data
+dist
+config.json
+xray-runtime.json
+xray2socks
+xray2socks-*
+x2socks
+x2socks-*
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore

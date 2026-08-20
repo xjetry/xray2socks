@@ -1,0 +1,14 @@
+services:
+  x2socks:
+    image: ghcr.io/xjetry/xray2socks:${XRAY2SOCKS_TAG:-latest}
+    build:
+      context: .
+      args:
+        GH_PROXY: ${GH_PROXY:-}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "1080-1090:1080-1090"
+    volumes:
+      - ./data:/data
