@@ -116,7 +116,7 @@ func buildXrayConfig(c AppConfig) ([]byte, error) {
 			}
 			outTags[j] = outTag
 			out := map[string]any{"tag": outTag, "protocol": xrayProtocol(h.Type), "settings": outboundSettings(h)}
-			if h.Type == "vless" || h.Type == "trojan" || j > 0 {
+			if h.Type == "vless" || h.Type == "trojan" || h.TLS || j > 0 {
 				ss := streamSettings(h)
 				// 链式转发：每一跳的底层连接经由前一跳建立，最后一跳是实际出口。
 				if j > 0 {
@@ -161,6 +161,12 @@ func outboundSettings(p Proxy) map[string]any {
 		return map[string]any{"servers": []map[string]any{{"address": p.Address, "port": p.Port, "method": p.Method, "password": p.Password}}}
 	case "trojan":
 		return map[string]any{"servers": []map[string]any{{"address": p.Address, "port": p.Port, "password": p.Password, "email": p.Name}}}
+	case "socks", "http":
+		server := map[string]any{"address": p.Address, "port": p.Port}
+		if p.Username != "" || p.Password != "" {
+			server["users"] = []map[string]any{{"user": p.Username, "pass": p.Password}}
+		}
+		return map[string]any{"servers": []map[string]any{server}}
 	default:
 		return map[string]any{"vnext": []map[string]any{{"address": p.Address, "port": p.Port, "users": []map[string]any{{"id": p.UUID, "encryption": "none", "flow": p.Flow}}}}}
 	}

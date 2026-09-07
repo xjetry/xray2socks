@@ -40,6 +40,7 @@ type Proxy struct {
 	PublicKey   string `json:"publicKey,omitempty"`
 	ShortID     string `json:"shortId,omitempty"`
 	Flow        string `json:"flow,omitempty"`
+	Username    string `json:"username,omitempty"`
 	Path        string `json:"path,omitempty"`
 	Host        string `json:"host,omitempty"`
 	ServiceName string `json:"serviceName,omitempty"`
@@ -172,8 +173,10 @@ func validateRemote(p Proxy, label string) error {
 		if p.Password == "" {
 			return fmt.Errorf("%s 缺少密码", label)
 		}
+	case "socks", "http":
+		// socks5 / http 代理允许无凭据
 	default:
-		return fmt.Errorf("%s 的类型仅支持 ss、vless 或 trojan", label)
+		return fmt.Errorf("%s 的类型仅支持 ss、vless、trojan 或 socks5", label)
 	}
 	return nil
 }

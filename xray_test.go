@@ -175,3 +175,50 @@ func TestValidateConfigChain(t *testing.T) {
 		t.Fatal("chain hop missing password should fail")
 	}
 }
+
+func TestOutboundSettingsSocksHTTP(t *testing.T) {
+	s := outboundSettings(Proxy{Type: "socks", Address: "a", Port: 1080, Username: "u", Password: "p"})
+	servers := s["servers"].([]map[string]any)[0]
+	users := servers["users"].([]map[string]any)[0]
+	if users["user"] != "u" || users["pass"] != "p" {
+		t.Fatalf("socks users = %v", users)
+	}
+	s = outboundSettings(Proxy{Type: "http", Address: "a", Port: 8080})
+	if _, has := s["servers"].([]map[string]any)[0]["users"]; has {
+		t.Fatal("无凭据 http 不应生成 users")
+	}
+	if xrayProtocol("socks") != "socks" || xrayProtocol("http") != "http" {
+		t.Fatal("protocol 映射错误")
+	}
+}
+
+func TestBuildXrayConfigHTTPSChain(t *testing.T) {
+	entry := Proxy{Name: "n", Type: "http", TLS: true, LocalPort: 1080, Address: "entry.example", Port: 443}
+	exit := Proxy{Name: "e", Type: "socks", Address: "exit.example", Port: 1080}
+	entry.Chain = []Proxy{exit}
+	b, err := buildXrayConfig(AppConfig{Proxies: []Proxy{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	outs := got["outbounds"].([]any)
+	first := outs[0].(map[string]any)
+	if first["protocol"] != "http" {
+		t.Fatalf("entry protocol = %v", first["protocol"])
+	}
+	ss := first["streamSettings"].(map[string]any)
+	if ss["security"] != "tls" {
+		t.Fatalf("https 入口应有 tls: %v", ss)
+	}
+	second := outs[1].(map[string]any)
+	if second["protocol"] != "socks" {
+		t.Fatalf("exit protocol = %v", second["protocol"])
+	}
+	sockopt := second["streamSettings"].(map[string]any)["sockopt"].(map[string]any)
+	if sockopt["dialerProxy"] != "proxy-1-1" {
+		t.Fatalf("dialerProxy = %v", sockopt["dialerProxy"])
+	}
+}

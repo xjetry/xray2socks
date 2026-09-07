@@ -29,6 +29,28 @@ func parseProxyURI(raw string) (Proxy, error) {
 		p.Password = u.User.Username()
 		fillTransport(&p, q)
 		return p, nil
+	case "socks5", "socks":
+		p.Type = "socks"
+		p.TLS = false
+		if u.Port() == "" {
+			p.Port = 1080
+		}
+		if u.User != nil {
+			p.Username = u.User.Username()
+			p.Password, _ = u.User.Password()
+		}
+		return p, nil
+	case "http", "https":
+		p.Type = "http"
+		p.TLS = u.Scheme == "https"
+		if u.Port() == "" && !p.TLS {
+			p.Port = 80
+		}
+		if u.User != nil {
+			p.Username = u.User.Username()
+			p.Password, _ = u.User.Password()
+		}
+		return p, nil
 	default:
 		return Proxy{}, fmt.Errorf("不支持的 URI 类型: %s", u.Scheme)
 	}
