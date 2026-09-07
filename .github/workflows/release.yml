@@ -49,6 +49,53 @@ jobs:
             --generate-notes \
             --verify-tag
 
+  brew:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download release assets and compute checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          for f in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
+            gh release download "${{ github.ref_name }}" -R "${{ github.repository }}" \
+              -D assets -p "x2socks-$f"
+          done
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Update formula
+        run: |
+          export \
+            SHA_DARWIN_AMD64="$(sha256sum assets/x2socks-darwin-amd64 | cut -d' ' -f1)" \
+            SHA_DARWIN_ARM64="$(sha256sum assets/x2socks-darwin-arm64 | cut -d' ' -f1)" \
+            SHA_LINUX_AMD64="$(sha256sum assets/x2socks-linux-amd64 | cut -d' ' -f1)" \
+            SHA_LINUX_ARM64="$(sha256sum assets/x2socks-linux-arm64 | cut -d' ' -f1)"
+          perl -0777 -pi -e '
+            s/(version\s+")[^"]+/${1}$ENV{VERSION}/;
+            s{/download/v[^/]+/}{/download/v$ENV{VERSION}/}g;
+            s/(darwin-amd64"\s*\n\s*sha256\s+")[0-9a-f]+/${1}$ENV{SHA_DARWIN_AMD64}/;
+            s/(darwin-arm64"\s*\n\s*sha256\s+")[0-9a-f]+/${1}$ENV{SHA_DARWIN_ARM64}/;
+            s/(linux-amd64"\s*\n\s*sha256\s+")[0-9a-f]+/${1}$ENV{SHA_LINUX_AMD64}/;
+            s/(linux-arm64"\s*\n\s*sha256\s+")[0-9a-f]+/${1}$ENV{SHA_LINUX_ARM64}/;
+          ' Formula/x2socks.rb
+          ruby -c Formula/x2socks.rb
+          cat Formula/x2socks.rb
+      - name: Push to homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/xjetry/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp Formula/x2socks.rb tap/Formula/x2socks.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/x2socks.rb
+          git commit -m "x2socks ${{ github.ref_name }}" || exit 0
+          git push
+
   image:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test

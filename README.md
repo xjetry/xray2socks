@@ -15,6 +15,15 @@ trojan1 -> 127.0.0.1:1083
 
 ## 安装
 
+macOS / Linux 用 Homebrew（推荐）：
+
+```bash
+brew trust xjetry/tap        # Homebrew 6.0+ 需要，只需一次；旧版可跳过
+brew install xjetry/tap/x2socks
+```
+
+或用脚本：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xjetry/xray2socks/main/install.sh | bash
 ```
