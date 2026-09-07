@@ -44,11 +44,25 @@ func stopPidFile(path string) {
 	_ = os.Remove(path)
 }
 
-func applyRuntime(a *app) error {
-	stopPidFile(a.pidFile())
-	if len(a.config.Proxies) == 0 {
-		return nil
+// pidAlive 报告 pid 文件存在且对应进程仍在运行。
+func pidAlive(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
 	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// startDetached 校验并按当前配置后台启动 Xray（脱离终端，写 pid 文件）。
+func startDetached(a *app) error {
 	if err := validateConfig(a.config); err != nil {
 		return err
 	}
@@ -74,6 +88,15 @@ func applyRuntime(a *app) error {
 		_ = logf.Close()
 		return err
 	}
+	return nil
+}
+
+// applyRuntime 停止现有 Xray 并按最新配置后台重启，等待本地端口就绪。
+func applyRuntime(a *app) error {
+	stopPidFile(a.pidFile())
+	if err := startDetached(a); err != nil {
+		return err
+	}
 	for _, p := range a.config.Proxies {
 		for _, addr := range socksListenAddrs(a.config, p) {
 			if err := waitTCP(dialWaitAddr(addr, p.LocalPort), 5*time.Second); err != nil {
@@ -95,5 +118,3 @@ func dialWaitAddr(listen string, port int) string {
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
-
-var afterMutate = applyRuntime

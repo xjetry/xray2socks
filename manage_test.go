@@ -12,7 +12,6 @@ func TestMain(m *testing.M) {
 	probeFn = func(Proxy) probeResult {
 		return probeResult{OK: true, Status: 204, LatencyMs: 1}
 	}
-	afterMutate = func(*app) error { return nil }
 	os.Exit(m.Run())
 }
 

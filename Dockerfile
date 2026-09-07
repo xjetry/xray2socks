@@ -28,4 +28,4 @@ ENV XRAY2SOCKS_CONFIG=/data/config.json \
 WORKDIR /data
 VOLUME /data
 EXPOSE 8080 1080-1090
-CMD ["x2socks", "serve"]
+CMD ["x2socks", "web"]

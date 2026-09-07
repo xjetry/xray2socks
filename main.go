@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -57,7 +56,6 @@ type AppConfig struct {
 type app struct {
 	mu     sync.Mutex
 	config AppConfig
-	cmd    *exec.Cmd
 	file   string
 }
 
@@ -89,46 +87,10 @@ func (a *app) saveLocked() error {
 	return os.WriteFile(a.file, append(b, '\n'), 0600)
 }
 
-func (a *app) running() bool { return a.cmd != nil }
+func (a *app) running() bool { return pidAlive(a.pidFile()) }
 
 func (a *app) xrayFile() string {
 	return filepath.Join(filepath.Dir(a.file), "xray-runtime.json")
-}
-
-func (a *app) startLocked() error {
-	if a.cmd != nil {
-		return errors.New("Xray 已经在运行")
-	}
-	if err := validateConfig(a.config); err != nil {
-		return err
-	}
-	bin, err := lookXray()
-	if err != nil {
-		return err
-	}
-	b, err := buildXrayConfig(a.config)
-	if err != nil {
-		return err
-	}
-	stopPidFile(a.pidFile())
-	cmd, err := startXray(bin, a.xrayFile(), b)
-	if err != nil {
-		return err
-	}
-	a.cmd = cmd
-	_ = os.WriteFile(a.pidFile(), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0600)
-	return nil
-}
-
-func (a *app) stopLocked() error {
-	if a.cmd == nil {
-		stopPidFile(a.pidFile())
-		return nil
-	}
-	err := stopXray(a.cmd)
-	a.cmd = nil
-	_ = os.Remove(a.pidFile())
-	return err
 }
 
 func validateConfig(c AppConfig) error {
@@ -240,13 +202,11 @@ func (a *app) configHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	if a.cmd != nil {
-		writeJSON(w, 409, map[string]string{"error": "请先停止 Xray 再修改配置"})
-		return
-	}
-	if err := checkPorts(c); err != nil {
-		writeJSON(w, 409, map[string]string{"error": err.Error()})
-		return
+	if !a.running() {
+		if err := checkPorts(c); err != nil {
+			writeJSON(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	a.config = c
 	if err := a.saveLocked(); err != nil {
@@ -268,20 +228,17 @@ func (a *app) statusHandler(w http.ResponseWriter, r *http.Request) {
 func (a *app) startHandler(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.startLocked(); err != nil {
+	if err := applyRuntime(a); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"running": true})
+	writeJSON(w, 200, map[string]any{"running": true})
 }
 func (a *app) stopHandler(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.stopLocked(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]bool{"running": false})
+	stopPidFile(a.pidFile())
+	writeJSON(w, 200, map[string]any{"running": false})
 }
 
 func testHandler(w http.ResponseWriter, r *http.Request) {
@@ -365,9 +322,9 @@ func installService(configFile, bind, webAddr string) error {
 	if err != nil {
 		return err
 	}
-	execStart := fmt.Sprintf("%s --config %s --web-addr %s serve", executable, configFile, webAddr)
+	execStart := fmt.Sprintf("%s --config %s --web-addr %s web", executable, configFile, webAddr)
 	if bind != "" {
-		execStart = fmt.Sprintf("%s --config %s --bind %s --web-addr %s serve", executable, configFile, bind, webAddr)
+		execStart = fmt.Sprintf("%s --config %s --bind %s --web-addr %s web", executable, configFile, bind, webAddr)
 	}
 	unit := fmt.Sprintf(`[Unit]
 Description=x2socks proxy service
@@ -446,7 +403,30 @@ func main() {
 		return
 	}
 	if args[0] == "serve" {
-		if err := runServe(file, bind, addr); err != nil {
+		a, err := newApp(file)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := applyRuntime(a); err != nil {
+			log.Fatalf("启动失败: %v", err)
+		}
+		for _, p := range a.config.Proxies {
+			fmt.Printf("socks5 %s:%d  %s\n", socksListen(a.config, p), p.LocalPort, p.Name)
+		}
+		return
+	}
+	if args[0] == "stop" {
+		a := &app{config: defaultConfig(), file: file}
+		if pidAlive(a.pidFile()) {
+			stopPidFile(a.pidFile())
+			log.Println("已停止")
+		} else {
+			log.Println("未在运行")
+		}
+		return
+	}
+	if args[0] == "web" {
+		if err := runWeb(file, bind, addr); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -463,11 +443,14 @@ x2socks edit {id} --uri {uri} [--uri {uri}...]
 x2socks edit {id} --bind {addr}
 x2socks remove {id}
 x2socks test '{uri}' ['{uri}'...]
+x2socks serve
+x2socks stop
+x2socks web
 x2socks uninstall
 x2socks uninstall --purge
 `
 
-func runServe(file, bind, addr string) error {
+func runWeb(file, bind, addr string) error {
 	a, err := newApp(file)
 	if err != nil {
 		return err
@@ -476,7 +459,7 @@ func runServe(file, bind, addr string) error {
 		a.config.BindHost = bind
 	}
 	a.mu.Lock()
-	if err := a.startLocked(); err != nil {
+	if err := applyRuntime(a); err != nil {
 		log.Printf("Xray 未启动: %v", err)
 	}
 	a.mu.Unlock()
@@ -490,9 +473,7 @@ func runServe(file, bind, addr string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	a.mu.Lock()
-	_ = a.stopLocked()
-	a.mu.Unlock()
+	// 编辑与运行独立控制：退出管理页不影响后台 Xray。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return server.Shutdown(ctx)

@@ -22,7 +22,7 @@ func TestLookXrayMissing(t *testing.T) {
 	}
 }
 
-func TestStartStopFakeXray(t *testing.T) {
+func TestStartDetachedFakeXray(t *testing.T) {
 	bin, err := filepath.Abs("testdata/fake-xray")
 	if err != nil {
 		t.Fatal(err)
@@ -37,19 +37,37 @@ func TestStartStopFakeXray(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.config.Proxies = []Proxy{{Name: "x", Type: "ss", LocalPort: 1080, Address: "a", Port: 1, Method: "aes-128-gcm", Password: "p"}}
-	if err := a.startLocked(); err != nil {
+	if err := startDetached(a); err != nil {
 		t.Fatal(err)
-	}
-	if !a.running() {
-		t.Fatal("should be running")
 	}
 	if _, err := os.Stat(a.xrayFile()); err != nil {
+		t.Fatalf("runtime 配置未写入: %v", err)
+	}
+	if !pidAlive(a.pidFile()) {
+		t.Fatal("pid 应存活")
+	}
+	stopPidFile(a.pidFile())
+	if pidAlive(a.pidFile()) {
+		t.Fatal("stop 后 pid 应清理")
+	}
+}
+
+func TestRunCommandMutateWithoutXray(t *testing.T) {
+	t.Setenv("XRAY_BIN", "")
+	t.Setenv("PATH", t.TempDir())
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.json")
+	if err := runCommand(f, []string{"add", testVLESS, "1080"}); err != nil {
+		t.Fatalf("编辑不应依赖 xray 二进制: %v", err)
+	}
+	a, err := newApp(f)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.stopLocked(); err != nil {
-		t.Fatal(err)
+	if len(a.config.Proxies) != 1 {
+		t.Fatalf("配置应已保存: %+v", a.config)
 	}
-	if a.running() {
-		t.Fatal("should be stopped")
+	if pidAlive(a.pidFile()) {
+		t.Fatal("编辑不应启动 Xray")
 	}
 }

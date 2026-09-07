@@ -264,8 +264,8 @@ func runTUI(a *app, in io.Reader, out io.Writer) error {
 			if err := a.saveLocked(); err != nil {
 				return err
 			}
-			if err := afterMutate(a); err != nil {
-				fmt.Fprintln(out, err)
+			if pidAlive(a.pidFile()) {
+				fmt.Fprintln(out, "Xray 正在运行，执行 x2socks serve 应用新配置")
 			}
 		}
 		fmt.Fprint(out, text)
@@ -288,7 +288,10 @@ func runCommand(file string, args []string) error {
 			return err
 		}
 		fmt.Print(text)
-		return afterMutate(a)
+		if pidAlive(a.pidFile()) {
+			fmt.Println("Xray 正在运行，执行 x2socks serve 应用新配置")
+		}
+		return nil
 	}
 	fmt.Print(text)
 	return nil
