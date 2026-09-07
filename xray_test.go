@@ -105,3 +105,73 @@ func TestBuildXrayConfigSSProtocol(t *testing.T) {
 		t.Fatalf("ss outbound protocol = %v", out["protocol"])
 	}
 }
+
+func TestBuildXrayConfigChain(t *testing.T) {
+	entry := Proxy{Name: "n", Type: "vless", LocalPort: 1080, Address: "entry.example", Port: 443, UUID: "u", Network: "tcp", TLS: true}
+	exit := Proxy{Name: "e", Type: "trojan", Address: "exit.example", Port: 8443, Password: "p", Network: "tcp", TLS: true}
+	entry.Chain = []Proxy{exit}
+	b, err := buildXrayConfig(AppConfig{Proxies: []Proxy{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	outs := got["outbounds"].([]any)
+	if len(outs) != 2 {
+		t.Fatalf("chain should generate two outbounds: %d", len(outs))
+	}
+	first := outs[0].(map[string]any)
+	second := outs[1].(map[string]any)
+	if first["tag"] != "proxy-1-1" || second["tag"] != "proxy-1-2" {
+		t.Fatalf("tags = %v, %v", first["tag"], second["tag"])
+	}
+	if _, ok := first["streamSettings"].(map[string]any)["sockopt"]; ok {
+		t.Fatal("entry hop must not have dialerProxy")
+	}
+	sock := second["streamSettings"].(map[string]any)["sockopt"].(map[string]any)
+	if sock["dialerProxy"] != "proxy-1-1" {
+		t.Fatalf("dialerProxy = %v", sock["dialerProxy"])
+	}
+	rule := got["routing"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+	if rule["outboundTag"] != "proxy-1-2" {
+		t.Fatalf("routing should target exit hop: %v", rule["outboundTag"])
+	}
+}
+
+func TestBuildXrayConfigSSChain(t *testing.T) {
+	entry := Proxy{Name: "n", Type: "ss", LocalPort: 1080, Address: "entry.example", Port: 1, Method: "aes-128-gcm", Password: "p"}
+	exit := Proxy{Name: "e", Type: "ss", Address: "exit.example", Port: 2, Method: "aes-128-gcm", Password: "p"}
+	entry.Chain = []Proxy{exit}
+	b, err := buildXrayConfig(AppConfig{Proxies: []Proxy{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	second := got["outbounds"].([]any)[1].(map[string]any)
+	sock, ok := second["streamSettings"].(map[string]any)["sockopt"].(map[string]any)
+	if !ok || sock["dialerProxy"] != "proxy-1-1" {
+		t.Fatalf("ss hop sockopt = %#v", second["streamSettings"])
+	}
+}
+
+func TestValidateConfigChain(t *testing.T) {
+	ok := AppConfig{Proxies: []Proxy{{
+		Name: "n", Type: "vless", LocalPort: 1080, Address: "a", Port: 443, UUID: "u",
+		Chain: []Proxy{{Name: "h", Type: "trojan", Address: "b", Port: 8443, Password: "p"}},
+	}}}
+	if err := validateConfig(ok); err != nil {
+		t.Fatalf("valid chain should pass: %v", err)
+	}
+	bad := AppConfig{Proxies: []Proxy{{
+		Name: "n", Type: "vless", LocalPort: 1080, Address: "a", Port: 443, UUID: "u",
+		Chain: []Proxy{{Name: "h", Type: "trojan", Address: "b", Port: 8443}},
+	}}}
+	if err := validateConfig(bad); err == nil {
+		t.Fatal("chain hop missing password should fail")
+	}
+}

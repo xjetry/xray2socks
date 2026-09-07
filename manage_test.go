@@ -267,3 +267,110 @@ func TestRunManageTestURI(t *testing.T) {
 		t.Fatal("invalid URI should fail")
 	}
 }
+
+const testSS = "ss://YWVzLTEyOC1nY206cGFzc3dvcmQ@ss.example:8388#ss1"
+
+func TestRunManageAddChain(t *testing.T) {
+	c := defaultConfig()
+	c, _, err := runManage(c, []string{"add", testVLESS, testTrojan, "1085"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Proxies[0]
+	if len(p.Chain) != 1 || p.Chain[0].Address != "other.example" || p.Chain[0].LocalPort != 0 || p.Chain[0].Listen != "" {
+		t.Fatalf("chain = %+v", p.Chain)
+	}
+	if p.LocalPort != 1085 || p.Address != "example.com" {
+		t.Fatalf("entry = %+v", p)
+	}
+
+	_, listed, err := runManage(c, []string{"list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listed, "example.com:443 -> other.example:8443") {
+		t.Fatalf("list should show chain target: %q", listed)
+	}
+}
+
+func TestRunManageAddThreeHopChain(t *testing.T) {
+	c := defaultConfig()
+	c, _, err := runManage(c, []string{"add", testVLESS, testTrojan, testSS, "1085", "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Proxies[0]
+	if len(p.Chain) != 2 || p.Chain[1].Address != "ss.example" {
+		t.Fatalf("chain = %+v", p.Chain)
+	}
+	if p.Listen != "127.0.0.1" {
+		t.Fatalf("bind = %q", p.Listen)
+	}
+}
+
+func TestParseAddArgsRejects(t *testing.T) {
+	for _, args := range [][]string{
+		{"1080"},
+		{testVLESS, "1080", "1081"},
+		{testVLESS, "127.0.0.1", "10.0.0.1"},
+	} {
+		if _, _, _, err := parseAddArgs(args); err == nil {
+			t.Fatalf("parseAddArgs(%v) should fail", args)
+		}
+	}
+}
+
+func TestEditChain(t *testing.T) {
+	c := defaultConfig()
+	c, _, err := runManage(c, []string{"add", testVLESS, testTrojan, "1080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, err = runManage(c, []string{"edit", "1", "--uri", testTrojan, "--uri", testSS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Proxies[0]
+	if p.Type != "trojan" || len(p.Chain) != 1 || p.Chain[0].Address != "ss.example" {
+		t.Fatalf("edit chain = %+v", p)
+	}
+	if p.LocalPort != 1080 || p.Listen != "0.0.0.0" {
+		t.Fatalf("edit chain should keep port/bind: %+v", p)
+	}
+
+	c, _, err = runManage(c, []string{"edit", "1", "--uri", testVLESS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Proxies[0].Chain) != 0 {
+		t.Fatalf("single --uri should clear chain: %+v", c.Proxies[0])
+	}
+}
+
+func TestRunManageTestChain(t *testing.T) {
+	old := probeFn
+	t.Cleanup(func() { probeFn = old })
+	var probed Proxy
+	probeFn = func(p Proxy) probeResult {
+		probed = p
+		return probeResult{OK: true, Status: 204, LatencyMs: 7}
+	}
+	c := defaultConfig()
+	c, _, err := runManage(c, []string{"add", testVLESS, "1080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, out, err := runManage(c, []string{"test", testVLESS, testTrojan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "7ms") {
+		t.Fatalf("test chain out = %q", out)
+	}
+	if len(probed.Chain) != 1 || probed.Chain[0].Address != "other.example" {
+		t.Fatalf("probe should include chain: %+v", probed)
+	}
+	if len(c.Proxies) != 1 || len(c.Proxies[0].Chain) != 0 {
+		t.Fatalf("test must not change config: %+v", c.Proxies)
+	}
+}

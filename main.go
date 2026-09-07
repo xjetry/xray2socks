@@ -44,6 +44,8 @@ type Proxy struct {
 	Host        string `json:"host,omitempty"`
 	ServiceName string `json:"serviceName,omitempty"`
 	Listen      string `json:"listen,omitempty"`
+	// Chain 为链式转发的后续节点，最后一个为实际出口。
+	Chain []Proxy `json:"chain,omitempty"`
 }
 
 type AppConfig struct {
@@ -134,29 +136,44 @@ func validateConfig(c AppConfig) error {
 	}
 	ports := make(map[int]bool, len(c.Proxies))
 	for i, p := range c.Proxies {
-		if p.Name == "" || p.Address == "" || p.Port < 1 || p.Port > 65535 || p.LocalPort < 1 || p.LocalPort > 65535 {
-			return fmt.Errorf("第 %d 个代理的名称、地址或端口无效", i+1)
+		if p.Name == "" || p.LocalPort < 1 || p.LocalPort > 65535 {
+			return fmt.Errorf("第 %d 个代理的名称或本地端口无效", i+1)
+		}
+		if err := validateRemote(p, fmt.Sprintf("代理 %q", p.Name)); err != nil {
+			return err
+		}
+		for j, hop := range p.Chain {
+			if err := validateRemote(hop, fmt.Sprintf("代理 %q 的第 %d 跳", p.Name, j+2)); err != nil {
+				return err
+			}
 		}
 		if ports[p.LocalPort] {
 			return fmt.Errorf("本地端口 %d 被重复使用", p.LocalPort)
 		}
 		ports[p.LocalPort] = true
-		switch strings.ToLower(p.Type) {
-		case "ss":
-			if p.Password == "" || p.Method == "" {
-				return fmt.Errorf("代理 %q 缺少密码或加密方式", p.Name)
-			}
-		case "vless":
-			if p.UUID == "" {
-				return fmt.Errorf("代理 %q 缺少 UUID", p.Name)
-			}
-		case "trojan":
-			if p.Password == "" {
-				return fmt.Errorf("代理 %q 缺少密码", p.Name)
-			}
-		default:
-			return fmt.Errorf("代理 %q 的类型仅支持 ss、vless 或 trojan", p.Name)
+	}
+	return nil
+}
+
+func validateRemote(p Proxy, label string) error {
+	if p.Address == "" || p.Port < 1 || p.Port > 65535 {
+		return fmt.Errorf("%s 的地址或端口无效", label)
+	}
+	switch strings.ToLower(p.Type) {
+	case "ss":
+		if p.Password == "" || p.Method == "" {
+			return fmt.Errorf("%s 缺少密码或加密方式", label)
 		}
+	case "vless":
+		if p.UUID == "" {
+			return fmt.Errorf("%s 缺少 UUID", label)
+		}
+	case "trojan":
+		if p.Password == "" {
+			return fmt.Errorf("%s 缺少密码", label)
+		}
+	default:
+		return fmt.Errorf("%s 的类型仅支持 ss、vless 或 trojan", label)
 	}
 	return nil
 }
@@ -266,15 +283,23 @@ func (a *app) stopHandler(w http.ResponseWriter, r *http.Request) {
 
 func testHandler(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		URI   string `json:"uri"`
-		Proxy Proxy  `json:"proxy"`
+		URI   string   `json:"uri"`
+		URIs  []string `json:"uris"`
+		Proxy Proxy    `json:"proxy"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "请求无效"})
 		return
 	}
 	p := input.Proxy
-	if input.URI != "" {
+	if len(input.URIs) > 0 {
+		var err error
+		p, err = parseProxyURIs(input.URIs)
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+	} else if input.URI != "" {
 		var err error
 		p, err = parseProxyURI(input.URI)
 		if err != nil {
@@ -292,13 +317,22 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 
 func parseHandler(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		URI string `json:"uri"`
+		URI  string   `json:"uri"`
+		URIs []string `json:"uris"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "请求无效"})
 		return
 	}
-	p, err := parseProxyURI(input.URI)
+	uris := input.URIs
+	if len(uris) == 0 {
+		uris = strings.Fields(input.URI)
+	}
+	if len(uris) == 0 {
+		writeJSON(w, 400, map[string]string{"error": "URI 为空"})
+		return
+	}
+	p, err := parseProxyURIs(uris)
 	if err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
@@ -420,12 +454,12 @@ func main() {
 }
 
 const cliUsage = `x2socks list
-x2socks add {uri} [port] [bind]
+x2socks add {uri} [uri...] [port] [bind]
 x2socks edit {id} --port {port}
-x2socks edit {id} --uri {uri}
+x2socks edit {id} --uri {uri} [--uri {uri}...]
 x2socks edit {id} --bind {addr}
 x2socks remove {id}
-x2socks test '{uri}'
+x2socks test '{uri}' ['{uri}'...]
 x2socks uninstall
 x2socks uninstall --purge
 `

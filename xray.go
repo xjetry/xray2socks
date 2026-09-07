@@ -107,7 +107,25 @@ func buildXrayConfig(c AppConfig) ([]byte, error) {
 	outbounds := make([]map[string]any, 0, len(c.Proxies))
 	rules := make([]map[string]any, 0, len(c.Proxies))
 	for i, p := range c.Proxies {
-		outTag := "proxy-" + strconv.Itoa(i+1)
+		hops := chainHops(p)
+		outTags := make([]string, len(hops))
+		for j, h := range hops {
+			outTag := "proxy-" + strconv.Itoa(i+1)
+			if len(hops) > 1 {
+				outTag += "-" + strconv.Itoa(j+1)
+			}
+			outTags[j] = outTag
+			out := map[string]any{"tag": outTag, "protocol": xrayProtocol(h.Type), "settings": outboundSettings(h)}
+			if h.Type == "vless" || h.Type == "trojan" || j > 0 {
+				ss := streamSettings(h)
+				// 链式转发：每一跳的底层连接经由前一跳建立，最后一跳是实际出口。
+				if j > 0 {
+					ss["sockopt"] = map[string]any{"dialerProxy": outTags[j-1]}
+				}
+				out["streamSettings"] = ss
+			}
+			outbounds = append(outbounds, out)
+		}
 		addrs := socksListenAddrs(c, p)
 		inTags := make([]string, 0, len(addrs))
 		for j, addr := range addrs {
@@ -118,14 +136,16 @@ func buildXrayConfig(c AppConfig) ([]byte, error) {
 			inTags = append(inTags, inTag)
 			inbounds = append(inbounds, map[string]any{"tag": inTag, "listen": addr, "port": p.LocalPort, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true}, "sniffing": map[string]any{"enabled": true, "destOverride": []string{"http", "tls", "quic"}}})
 		}
-		out := map[string]any{"tag": outTag, "protocol": xrayProtocol(p.Type), "settings": outboundSettings(p)}
-		if p.Type == "vless" || p.Type == "trojan" {
-			out["streamSettings"] = streamSettings(p)
-		}
-		outbounds = append(outbounds, out)
-		rules = append(rules, map[string]any{"type": "field", "inboundTag": inTags, "outboundTag": outTag})
+		rules = append(rules, map[string]any{"type": "field", "inboundTag": inTags, "outboundTag": outTags[len(outTags)-1]})
 	}
 	return json.Marshal(map[string]any{"log": map[string]any{"loglevel": "warning"}, "inbounds": inbounds, "outbounds": outbounds, "routing": map[string]any{"domainStrategy": "AsIs", "rules": rules}})
+}
+
+// chainHops 返回完整转发链：入口节点在前，后续 Chain 依次排列，最后一个为出口。
+func chainHops(p Proxy) []Proxy {
+	hops := make([]Proxy, 0, len(p.Chain)+1)
+	hops = append(hops, p)
+	return append(hops, p.Chain...)
 }
 
 func xrayProtocol(t string) string {

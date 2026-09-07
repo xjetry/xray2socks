@@ -20,11 +20,11 @@ func runManage(c AppConfig, args []string) (AppConfig, string, error) {
 		}
 		return c, formatProxyList(c, probeAll(c.Proxies)), nil
 	case "add":
-		uri, port, bind, err := parseAddArgs(args[1:])
+		uris, port, bind, err := parseAddArgs(args[1:])
 		if err != nil {
 			return c, "", err
 		}
-		next, err := addProxy(c, uri, port, bind)
+		next, err := addProxy(c, uris, port, bind)
 		if err != nil {
 			return c, "", err
 		}
@@ -47,10 +47,10 @@ func runManage(c AppConfig, args []string) (AppConfig, string, error) {
 		}
 		return next, "ok\n", nil
 	case "test":
-		if len(args) != 2 {
-			return c, "", fmt.Errorf("用法: test {uri}")
+		if len(args) < 2 {
+			return c, "", fmt.Errorf("用法: test '{uri}' ['{uri}'...]")
 		}
-		p, err := parseProxyURI(args[1])
+		p, err := parseProxyURIs(args[1:])
 		if err != nil {
 			return c, "", err
 		}
@@ -62,33 +62,34 @@ func runManage(c AppConfig, args []string) (AppConfig, string, error) {
 }
 
 const manageUsage = `用法:
-  add {uri} [port] [bind]
+  add {uri} [uri...] [port] [bind]   多个 uri 为链式转发，最后一个为出口
   remove {id}
-  edit {id} [--uri URI] [--port PORT] [--bind ADDR]
+  edit {id} [--uri URI]... [--port PORT] [--bind ADDR]
   list
-  test '{uri}'`
+  test '{uri}' ['{uri}'...]`
 
-func parseAddArgs(args []string) (uri string, port int, bind string, err error) {
-	if len(args) < 1 || len(args) > 3 {
-		return "", 0, "", fmt.Errorf("用法: add {uri} [port] [bind]")
-	}
-	uri = args[0]
-	bind = "0.0.0.0"
-	switch len(args) {
-	case 2:
-		if isPortToken(args[1]) {
-			port, _ = strconv.Atoi(args[1])
-		} else {
-			bind = args[1]
+func parseAddArgs(args []string) (uris []string, port int, bind string, err error) {
+	usage := fmt.Errorf("用法: add {uri} [uri...] [port] [bind]")
+	for _, a := range args {
+		switch {
+		case strings.Contains(a, "://"):
+			uris = append(uris, a)
+		case isPortToken(a):
+			if port != 0 {
+				return nil, 0, "", fmt.Errorf("端口重复")
+			}
+			port, _ = strconv.Atoi(a)
+		default:
+			if bind != "" {
+				return nil, 0, "", usage
+			}
+			bind = a
 		}
-	case 3:
-		port, err = strconv.Atoi(args[1])
-		if err != nil || port < 1 || port > 65535 {
-			return "", 0, "", fmt.Errorf("端口无效")
-		}
-		bind = args[2]
 	}
-	return uri, port, bind, nil
+	if len(uris) == 0 {
+		return nil, 0, "", usage
+	}
+	return uris, port, bind, nil
 }
 
 func parseID(raw string, n int) (int, error) {
@@ -99,8 +100,11 @@ func parseID(raw string, n int) (int, error) {
 	return id, nil
 }
 
-func addProxy(c AppConfig, uri string, port int, bind string) (AppConfig, error) {
-	p, err := parseProxyURI(uri)
+func addProxy(c AppConfig, uris []string, port int, bind string) (AppConfig, error) {
+	if len(uris) == 0 {
+		return c, fmt.Errorf("用法: add {uri} [uri...] [port] [bind]")
+	}
+	p, err := parseProxyURIs(uris)
 	if err != nil {
 		return c, err
 	}
@@ -123,13 +127,31 @@ func addProxy(c AppConfig, uri string, port int, bind string) (AppConfig, error)
 	return next, nil
 }
 
+// parseProxyURIs 把一组 URI 解析为入口节点 + 链式转发，最后一个 URI 为实际出口。
+func parseProxyURIs(uris []string) (Proxy, error) {
+	p, err := parseProxyURI(uris[0])
+	if err != nil {
+		return Proxy{}, err
+	}
+	for _, u := range uris[1:] {
+		hop, err := parseProxyURI(u)
+		if err != nil {
+			return Proxy{}, err
+		}
+		hop.LocalPort, hop.Listen = 0, ""
+		p.Chain = append(p.Chain, hop)
+	}
+	return p, nil
+}
+
 func editProxy(c AppConfig, args []string) (AppConfig, error) {
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	uri := fs.String("uri", "", "")
+	var uris uriList
+	fs.Var(&uris, "uri", "URI，可重复多次组成链式转发")
 	port := fs.Int("port", 0, "")
 	bind := fs.String("bind", "", "")
-	editUsage := "用法: edit {id} [--uri URI] [--port PORT] [--bind ADDR]"
+	editUsage := "用法: edit {id} [--uri URI]... [--port PORT] [--bind ADDR]"
 	if len(args) == 0 {
 		return c, fmt.Errorf("%s", editUsage)
 	}
@@ -149,12 +171,12 @@ func editProxy(c AppConfig, args []string) (AppConfig, error) {
 			bindSet = true
 		}
 	})
-	if *uri == "" && *port == 0 && !bindSet {
+	if len(uris) == 0 && *port == 0 && !bindSet {
 		return c, fmt.Errorf("edit 需要 --uri、--port 或 --bind")
 	}
 	p := c.Proxies[id-1]
-	if *uri != "" {
-		parsed, err := parseProxyURI(*uri)
+	if len(uris) > 0 {
+		parsed, err := parseProxyURIs(uris)
 		if err != nil {
 			return c, err
 		}
@@ -180,6 +202,24 @@ func editProxy(c AppConfig, args []string) (AppConfig, error) {
 	return next, nil
 }
 
+// uriList 实现 flag.Value，支持 --uri 重复指定多个 URI。
+type uriList []string
+
+func (l *uriList) String() string { return strings.Join(*l, " ") }
+
+func (l *uriList) Set(s string) error {
+	*l = append(*l, s)
+	return nil
+}
+
+func targetText(p Proxy) string {
+	s := fmt.Sprintf("%s:%d", p.Address, p.Port)
+	for _, h := range p.Chain {
+		s += " -> " + fmt.Sprintf("%s:%d", h.Address, h.Port)
+	}
+	return s
+}
+
 func formatProxyList(c AppConfig, results []probeResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-4s %-8s %-5s %-11s %-8s %-24s %s\n", "ID", "TYPE", "PORT", "BIND", "LATENCY", "TARGET", "NAME")
@@ -188,7 +228,7 @@ func formatProxyList(c AppConfig, results []probeResult) string {
 		if i < len(results) {
 			lat = latencyText(results[i])
 		}
-		fmt.Fprintf(&b, "%-4d %-8s %-5d %-11s %-8s %-24s %s\n", i+1, p.Type, p.LocalPort, socksListen(c, p), lat, fmt.Sprintf("%s:%d", p.Address, p.Port), p.Name)
+		fmt.Fprintf(&b, "%-4d %-8s %-5d %-11s %-8s %-24s %s\n", i+1, p.Type, p.LocalPort, socksListen(c, p), lat, targetText(p), p.Name)
 	}
 	return b.String()
 }
