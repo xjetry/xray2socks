@@ -31,7 +31,7 @@ func stopPidFile(path string) {
 	}
 	proc, err := os.FindProcess(pid)
 	if err == nil {
-		_ = proc.Signal(syscall.SIGTERM)
+		_ = terminateProcess(proc)
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
 			if err := proc.Signal(syscall.Signal(0)); err != nil {

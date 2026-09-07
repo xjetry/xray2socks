@@ -43,6 +43,7 @@ jobs:
             dist/x2socks-linux-arm64 \
             dist/x2socks-darwin-amd64 \
             dist/x2socks-darwin-arm64 \
+            dist/x2socks-windows-amd64.exe \
             dist/install.sh \
             --title "${{ github.ref_name }}" \
             --generate-notes \

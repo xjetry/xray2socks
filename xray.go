@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -53,7 +52,7 @@ func startXrayLogDetach(bin, cfgPath string, cfg []byte, log io.Writer, detach b
 	cmd.Stdout = log
 	cmd.Stderr = log
 	if detach {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.SysProcAttr = detachAttr()
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("启动 Xray 失败: %w", err)
@@ -68,7 +67,7 @@ func stopXray(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = terminateProcess(cmd.Process)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
